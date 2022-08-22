@@ -17,7 +17,6 @@ EXAMPLE:
 
 DESCRIPTION:
   When you change your file, restart command.
-  If you want to specify ignore file, you should put .watchignore on c
 ```
 
 ## Example
