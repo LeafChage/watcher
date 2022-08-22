@@ -3,8 +3,8 @@ common hot reloader
 
 ## Install
 ```
-curl https://raw.githubusercontent.com/LeafChage/envy/main/envy > ./envy
-chmod +x ./envy
+curl https://raw.githubusercontent.com/LeafChage/watcher/main/watcher > ./watcher
+chmod +x ./watcher
 ```
 
 ## How to use
