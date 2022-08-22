@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+###
+### util
+###
+COLOR_OFF="\033[0m"
+COLOR_RED="\033[0;31m"
+COLOR_GREEN="\033[0;32m"
+function debug() { echo "$1" 1>&2; }
+function error() { echo "$1" 1>&2; exit 1; }
+
+function target_file() {
+    find "." -type "f" -not -name "."
+}
+
+###
+### file_hash
+###
+function file_hash.gene {
+    while read -r line; do
+        if [ "$(uname)" == "Darwin" ] ; then
+            echo "$line":"$(md5 -q "$line")"
+        else
+            error "unimplemented"
+        fi
+    done
+}
+function file_hash.key() {
+    key=$(echo "$1" | cut -d':' -f 1 | base64 | sed -e "s/\=//g")
+    if [ -z "$key" ]; then error "?"; fi
+    echo "$key"
+}
+function file_hash.value() {
+    value=$(echo "$1" | cut -d':' -f 2)
+    if [ -z "$value" ]; then error "?"; fi
+    echo "$value"
+}
+
+###
+### file_hashs
+###
+declare -gA file_hashs=()
+function file_hashs.debug() {
+    for file in "${!file_hashs[@]}"; do
+        debug "${file} / ${file_hashs[${file}]}"
+    done
+}
+function file_hashs.init() {
+    file_hashs=()
+}
+function file_hashs.set() {
+    file_hashs["$1"]="$2"
+}
+function file_hashs.has_changed() {
+    before_value=${file_hashs["$1"]}
+    if [ -z "$before_value" ]; then
+        echo 1
+    elif [ ! "$before_value" == "$2" ]; then
+        echo 1
+    else
+        echo 0
+    fi
+}
+function file_hashs.watch() {
+    changed=0;
+
+    while read -r line; do
+        key=$(file_hash.key "$line")
+        value=$(file_hash.value "$line")
+
+        before_value=${file_hashs["$key"]}
+        if [ -z "$before_value" ]; then
+            changed=1
+            debug "key: ${key} ${value}"
+            file_hashs["$key"]="$value"
+        elif [ ! "$before_value" == "$value" ]; then
+            changed=1
+            file_hashs["$key"]="$value"
+        fi
+    done
+    echo $changed
+}
+
+###
+### core
+###
+declare -g watcher_pid=""
+
+function usage() {
+    echo "watcher common hot reloader"
+    echo ""
+    echo "EXAMPLE:"
+    echo "  watcher php -S localhost:8080"
+    echo ""
+    echo "DESCRIPTION:"
+    echo "  When you change your file, restart command."
+    # echo "  If you want to specify ignore file, you should put .watchignore on current directory."
+    # echo ""
+    # echo "DESCRIPTION(.watchignore)"
+    # echo "  Sorry, Support only simple syntax."
+    # echo "  EX)"
+    # echo "    node_modules"
+    # echo "    .git"
+    # echo "    .gitignore"
+}
+
+function watch.cmd.start() {
+    ${*} &
+    watcher_pid="$! ${*}"
+}
+
+function watch.cmd.living_process() {
+    pid=$(echo "$1" | cut -d' ' -f 1)
+    cmd=$(echo "$1" | cut -d' ' -f 2-)
+    if [ "$(pgrep -f "$cmd")" == "$pid" ] ; then
+        echo "$pid"
+    fi
+}
+
+function watch.cmd.stop() {
+    if [ -n "$watcher_pid" ]; then
+        living_target_pid=$(watch.cmd.living_process "$watcher_pid")
+        echo "$living_target_pid" 1>&2
+        if [ -n "$living_target_pid" ]; then
+            kill "$living_target_pid"
+        fi
+    else
+        error "not found WATCHER_PID"
+fi
+}
+
+function watch.finally() {
+    echo "OK. I will stop command."
+    exit 0;
+}
+
+function watch.run() {
+    watch.cmd.start "$@"
+    file_hashs.init
+
+    for line in $(target_file | file_hash.gene); do
+        key="$(file_hash.key "$line")"
+        value="$(file_hash.value "$line")"
+        file_hashs.set "$key" "$value"
+    done
+
+    while true; do
+        sleep 1
+
+        rerun=0
+        for line in $(target_file | file_hash.gene); do
+            key="$(file_hash.key "$line")"
+            value="$(file_hash.value "$line")"
+            if [ "$(file_hashs.has_changed "$key" "$value")" == "1" ]; then
+                rerun=1
+                file_hashs.set "$key" "$value"
+            fi
+        done
+
+        if [ "$rerun" == "1" ]; then
+            debug "Rerun!!!"
+            watch.cmd.stop
+            watch.cmd.start "$@"
+        fi
+    done
+}
+
+function tests() {
+    eq() { if [ "$1" == "$2" ]; then echo -e "${COLOR_GREEN}ok${COLOR_OFF}"; else echo -e "${COLOR_RED}ng $1 / $2 $COLOR_OFF"; fi; }
+    not() { if [ ! "$1" == "$2" ]; then echo -e "${COLOR_GREEN}ok${COLOR_OFF}"; else echo -e "${COLOR_RED}ng $1 / $2 $COLOR_OFF"; fi; }
+    echo "# ignore"
+    eq "$(echo '# hello' | ignore.skip_comment)" ""
+    eq "$(echo 'hello' | ignore.skip_comment)" "hello"
+    eq "$(echo ' hello' | ignore.skip_contain_space_string)" ""
+    eq "$(echo 'hello' | ignore.skip_contain_space_string)" "hello"
+    eq "$(echo 'he llo' | ignore.skip_contain_space_string)" ""
+}
+
+main() {
+    subcmd="${1:-nothing}"
+    case "$subcmd" in
+        "help" )
+            usage
+            exit 0 ;;
+        "_test_" )
+            tests
+            exit 0 ;;
+        "nothing" )
+            usage
+            exit 1 ;;
+        * )
+            trap watch.finally SIGINT
+            watch.run "${@:1:($#)}"
+            ;;
+    esac
+}
+
+main "$@"
+
+
